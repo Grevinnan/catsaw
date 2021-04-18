@@ -181,7 +181,7 @@ function printLines(lines, checkAM) {
             textColor = colorMap[type];
         }
         if (filterRegexp !== null) {
-            let replaced = l.line.replaceAll(filterRegexp, '^#^m$1^#^k');
+            let replaced = l.line.replaceAll(filterRegexp, `^#^m$1^#^:${textColor}`);
             // If the length changed we know that we found a match
             if (replaced.length === l.line.length) {
                 continue;
