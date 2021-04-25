@@ -6,7 +6,10 @@ import _ from 'lodash';
 import tkit from 'terminal-kit';
 const terminal = tkit.terminal;
 
-let logcat = cp.spawn('adb', ['logcat', '-v', 'threadtime']);
+import yargs from 'yargs'
+import {
+    hideBin
+} from 'yargs/helpers'
 
 const colorMap = {
     'D': '^B',
@@ -59,7 +62,58 @@ let filterPackage = null;
 let filterRegexp = null;
 let filterLogLevel = null;
 
-const currentDeviceYear = getCurrentYear();
+async function selectPackage(searchTerm = null) {
+    pause = true;
+    if (!searchTerm) {
+        terminal('Enter package name search: ');
+        searchTerm = await terminal.inputField({}).promise;
+        terminal('\n');
+    }
+
+    // cmd package list packages -e
+    let processes = cp.spawnSync('adb', ['shell', 'cmd', 'package', 'list', 'packages', '-e']);
+    let installedPackages = processes.stdout.toString().split(/\n/);
+    let regexp = new RegExp(`${searchTerm}`, "i");
+    let matches = [];
+    for (let l of installedPackages) {
+        if (l.match(regexp)) {
+            matches.push(l);
+        }
+    }
+    if (matches.length === 0) {
+        terminal('No matches found\n');
+        pause = false;
+        return;
+    }
+
+    let packageName = matches[0].substring('package:'.length);
+    if (matches.length > 1) {
+        let cursorPos = await terminal.getCursorLocation();
+        let selectedPackage = await terminal.singleColumnMenu(matches, {}).promise;
+        terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
+        const spaceLine = Array(terminal.width).join(' ');
+        for (let i = 0; i < matches.length + 1; ++i) {
+            terminal(`${spaceLine}\n`);
+        }
+        terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
+        packageName = selectedPackage.selectedText.substring('package:'.length);
+    }
+
+    const filterPID = getPID(packageName);
+    terminal(`Using package name ^g${packageName}^:\n`);
+    terminal(`Found PID ^g${filterPID}^:\n`);
+    if (!filterPID) {
+        terminal('^rCould not get PID, aborting^:\n\n');
+    } else {
+        filterPackage = {
+            packageName: packageName,
+            PID: filterPID,
+            timestampPID: new Date(getTime() * 1000),
+            searchExpr: new RegExp(_.escapeRegExp(packageName)),
+        };
+    }
+    pause = false;
+}
 
 let textColor = '^w';
 terminal.grabInput(true);
@@ -105,50 +159,7 @@ terminal.on('key', async (key) => {
         filterPackage = null;
     }
     if (key === 'p') {
-        pause = true;
-        terminal('Enter package name search: ');
-        let packageSearch = await terminal.inputField({}).promise;
-        terminal('\n');
-
-        // cmd package list packages -e
-        let processes = cp.spawnSync('adb', ['shell', 'cmd', 'package', 'list', 'packages', '-e']);
-        let installedPackages = processes.stdout.toString().split(/\n/);
-        let regexp = new RegExp(`${packageSearch}`, "i");
-        let matches = [];
-        for (let l of installedPackages) {
-            if (l.match(regexp)) {
-                matches.push(l);
-            }
-        }
-        if (matches.length === 0) {
-            terminal('No matches found\n');
-            pause = false;
-            return;
-        }
-
-        let cursorPos = await terminal.getCursorLocation();
-        let selectedPackage = await terminal.singleColumnMenu(matches, {}).promise;
-        terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
-        const spaceLine = Array(terminal.width).join(' ');
-        for (let i = 0; i < matches.length + 1; ++i) {
-            terminal(`${spaceLine}\n`);
-        }
-        terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
-        let packageName = selectedPackage.selectedText.substring('package:'.length);
-        const filterPID = getPID(packageName);
-        terminal(`Using package name ^g${packageName}^:\n`);
-        terminal(`Found PID ^g${filterPID}^:\n`);
-        if (!filterPID) {
-            terminal('^rCould not get PID, aborting^:\n\n');
-        } else {
-            filterPackage = {
-                packageName: packageName,
-                PID: filterPID,
-                timestampPID: new Date(getTime() * 1000),
-                searchExpr: new RegExp(_.escapeRegExp(packageName)),
-            };
-        }
-        pause = false;
+        selectPackage();
     }
     if (key == 'ENTER') {
         terminal("\n");
@@ -233,6 +244,33 @@ function printLines(lines, checkAM) {
         }
         terminal(`${textColor}${l.line}\n`);
     }
+}
+
+const options = yargs(hideBin(process.argv))
+    .scriptName('catsaw')
+    .version('v0.0.1')
+    .usage('catsaw - adb logcat wrapper')
+    .alias('h', 'help')
+    .strict(true)
+    .option('v', {
+        alias: 'verbose',
+        type: 'boolean',
+        description: 'Verbose output',
+        default: false,
+    })
+    .option('p', {
+        alias: 'package',
+        type: 'string',
+        description: 'Filter on selected package',
+    }).argv;
+
+// TODO: Check adb status
+const currentDeviceYear = getCurrentYear();
+
+let logcat = cp.spawn('adb', ['logcat', '-v', 'threadtime']);
+
+if (options.package) {
+    selectPackage(options.package);
 }
 
 logcat.stdout.on('data', function(data) {
