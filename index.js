@@ -62,6 +62,9 @@ let filterPackage = null;
 let filterRegexp = null;
 let filterLogLevel = null;
 
+// TODO: handle resize
+const spaceLine = Array(terminal.width).join(' ');
+
 async function selectPackage(searchTerm = null) {
     pause = true;
     if (!searchTerm) {
@@ -91,7 +94,6 @@ async function selectPackage(searchTerm = null) {
         let cursorPos = await terminal.getCursorLocation();
         let selectedPackage = await terminal.singleColumnMenu(matches, {}).promise;
         terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
-        const spaceLine = Array(terminal.width).join(' ');
         for (let i = 0; i < matches.length + 1; ++i) {
             terminal(`${spaceLine}\n`);
         }
@@ -208,7 +210,7 @@ function checkActivityManager(line) {
             let logTime = parseThreadtimeTime(day, hour);
             // Don't check PID if we don't have to!
             if (logTime.getTime() > filterPackage.timestampPID) {
-                console.log('checking PID');
+                // console.log('checking PID');
                 filterPackage.PID = getPID(filterPackage.packageName);
             }
             // console.timeEnd('PID');
@@ -218,6 +220,7 @@ function checkActivityManager(line) {
 }
 
 function printLines(lines, checkAM) {
+    let printedLines = 0;
     for (let l of lines) {
         if (checkAM) {
             checkActivityManager(l);
@@ -242,7 +245,12 @@ function printLines(lines, checkAM) {
             }
             l.line = replaced;
         }
-        terminal(`${textColor}${l.line}\n`);
+        terminal(`\r${spaceLine}}\r${textColor}${l.line}\n`);
+        printedLines += 1;
+    }
+    // Show some kind of status so that you know when it is active
+    if (printedLines == 0) {
+        terminal(`\r${spaceLine}\rFiltered ^#^g^k${lines.length}^: lines`);
     }
 }
 
