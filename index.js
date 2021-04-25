@@ -36,10 +36,30 @@ function getPID(packageName) {
     return pid;
 }
 
+function getCurrentYear() {
+    let timeProc = cp.spawnSync('adb', ['shell', 'date', '+%Y']);
+    let currentYear = timeProc.stdout.toString().trim();
+    if (currentYear.length === 0) {
+        return null;
+    }
+    return currentYear;
+}
+
+function getTime() {
+    let timeProc = cp.spawnSync('adb', ['shell', 'date', '+%s']);
+    let timestamp = timeProc.stdout.toString().trim();
+    if (timestamp.length === 0) {
+        return null;
+    }
+    return timestamp;
+}
+
 let pause = false;
 let filterPackage = null;
 let filterRegexp = null;
 let filterLogLevel = null;
+
+const currentDeviceYear = getCurrentYear();
 
 let textColor = '^w';
 terminal.grabInput(true);
@@ -124,10 +144,14 @@ terminal.on('key', async (key) => {
             filterPackage = {
                 packageName: packageName,
                 PID: filterPID,
+                timestampPID: new Date(getTime() * 1000),
                 searchExpr: new RegExp(_.escapeRegExp(packageName)),
             };
         }
         pause = false;
+    }
+    if (key == 'ENTER') {
+        terminal("\n");
     }
 });
 
@@ -146,6 +170,20 @@ terminal.on('key', async (key) => {
 //maxLength: 3
 // let history = [];
 
+function parseThreadtimeTime(day, hour) {
+    let t = new Date(0);
+    let dayParts = day.split('-').map(x => parseInt(x))
+    t.setMonth(dayParts[0] - 1);
+    t.setDate(dayParts[1]);
+    let hourParts = hour.split(':');
+    t.setHours(parseInt(hourParts[0]));
+    t.setMinutes(parseInt(hourParts[1]));
+    let secondParts = hourParts[2].split('.').map(x => parseInt(x));
+    t.setSeconds(secondParts[0], secondParts[1]);
+    t.setFullYear(currentDeviceYear);
+    return t;
+}
+
 let bufferLines = [];
 let tail = '';
 
@@ -154,9 +192,14 @@ function checkActivityManager(line) {
     // Refresh the PID if the filtered process is affected
     if (filterPackage && packageName === 'ActivityManager:') {
         if (line.line.match(line.searchExpr)) {
-            // terminal(`${filterPackage.packageName} ${line.line}\n`);
-            // console.time('PID');
-            filterPackage.PID = getPID(filterPackage.packageName);
+            const day = line.parts[0];
+            const hour = line.parts[1];
+            let logTime = parseThreadtimeTime(day, hour);
+            // Don't check PID if we don't have to!
+            if (logTime.getTime() > filterPackage.timestampPID) {
+                console.log('checking PID');
+                filterPackage.PID = getPID(filterPackage.packageName);
+            }
             // console.timeEnd('PID');
             // terminal(`new PID ${filterPackage.PID}\n`);
         }
