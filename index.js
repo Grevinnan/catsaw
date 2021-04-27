@@ -100,7 +100,24 @@ function printStatus() {
     if (filterLogLevel !== null) {
         statusText += `^#^M^k ${levels[filterLogLevel]} ^:`;
     }
-    terminal(`\r${clearLine}\r${statusText}`);
+    let numCarets = 0;
+    for (let i = 0; i < statusText.length - 1; ++i) {
+        let c = statusText.charAt(i);
+        let n = statusText.charAt(i + 1);
+        if (c === '^' && n === '^') {
+            // TODO: Safe?
+            ++i;
+        } else if (c === '^' && n !== '^') {
+            numCarets += 1;
+        }
+    }
+
+    const statusStrLen = statusText.length - 2 * numCarets;
+    const spacePrefix = Array(terminal.width - statusStrLen).join(' ');
+
+    terminal.saveCursor();
+    terminal(`\r${clearLine}\r${spacePrefix}${statusText}`);
+    terminal.restoreCursor();
 }
 
 async function selectPackage(searchTerm = null) {
@@ -195,7 +212,8 @@ terminal.on('key', async (key) => {
         terminal('\n');
         filterRegexp = {
             regexp: new RegExp(`(${searchTerm})`, "ig"),
-            searchterm: searchTerm,
+            // Escape the formatting characters
+            searchterm: searchTerm.replaceAll(/\^/g, "^^"),
         };
         interacting = false;
         printStatus();
@@ -214,7 +232,9 @@ terminal.on('key', async (key) => {
         selectPackage();
     }
     if (key == 'ENTER') {
+        clearCurrentLine();
         terminal("\n");
+        printStatus();
     }
     if (key == ' ') {
         paused = !paused;
