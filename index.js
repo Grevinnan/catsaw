@@ -57,6 +57,7 @@ function getTime() {
     return timestamp;
 }
 
+let showStatusLine = true;
 let interacting = false;
 let paused = false;
 let filterPackage = null;
@@ -82,6 +83,10 @@ function clearCurrentLine() {
 }
 
 function printStatus() {
+    if (!showStatusLine) {
+        terminal(`\r${clearLine}\r`);
+        return;
+    }
     const stateColor = paused ? '^R' : '^G';
     const stateChar = paused ? 'P' : 'A';
     const stateField = `^#${stateColor}^k ${stateChar} ^:`;
@@ -234,6 +239,10 @@ terminal.on('key', async (key) => {
     if (key == 'ENTER') {
         clearCurrentLine();
         terminal("\n");
+        printStatus();
+    }
+    if (key == 'u') {
+        showStatusLine = !showStatusLine;
         printStatus();
     }
     if (key == ' ') {
