@@ -104,15 +104,14 @@ async function selectPackage(searchTerm = null) {
     const filterPID = getPID(packageName);
     terminal(`Using package name ^g${packageName}^:\n`);
     terminal(`Found PID ^g${filterPID}^:\n`);
+    filterPackage = {
+        packageName: packageName,
+        PID: filterPID,
+        timestampPID: new Date(getTime() * 1000),
+        searchExpr: new RegExp(_.escapeRegExp(packageName)),
+    };
     if (!filterPID) {
-        terminal('^rCould not get PID, aborting^:\n\n');
-    } else {
-        filterPackage = {
-            packageName: packageName,
-            PID: filterPID,
-            timestampPID: new Date(getTime() * 1000),
-            searchExpr: new RegExp(_.escapeRegExp(packageName)),
-        };
+        terminal('^rCould not get PID, waiting for start^:\n\n');
     }
     pause = false;
 }
@@ -225,7 +224,7 @@ function printLines(lines, checkAM) {
         if (checkAM) {
             checkActivityManager(l);
         }
-        const PID = l.parts[3];
+        const PID = l.parts[2];
         const type = l.parts[4];
         const level = levelMap[type];
         if (filterLogLevel !== null && level < filterLogLevel) {
@@ -245,7 +244,7 @@ function printLines(lines, checkAM) {
             }
             l.line = replaced;
         }
-        terminal(`\r${spaceLine}}\r${textColor}${l.line}\n`);
+        terminal(`\r${spaceLine}\r${textColor}${l.line}\n`);
         printedLines += 1;
     }
     // Show some kind of status so that you know when it is active
