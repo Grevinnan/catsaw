@@ -57,16 +57,55 @@ function getTime() {
     return timestamp;
 }
 
-let pause = false;
+let interacting = false;
+let paused = false;
 let filterPackage = null;
 let filterRegexp = null;
 let filterLogLevel = null;
 
 // TODO: handle resize
-const spaceLine = Array(terminal.width).join(' ');
+const clearLine = Array(terminal.width).join(' ');
+let totalFiltered = 0;
+
+let bufferLines = [];
+let tail = '';
+
+function printBuffered() {
+    // Don't check the PID on buffered lines
+    let lines = bufferLines;
+    bufferLines = [];
+    printLines(lines, false);
+}
+
+function clearCurrentLine() {
+    terminal(`\r${clearLine}\r`);
+}
+
+function printStatus() {
+    const stateColor = paused ? '^R' : '^G';
+    const stateChar = paused ? 'P' : 'A';
+    const stateField = `^#${stateColor}^k ${stateChar} ^:`;
+    const filterdField = `^#^y^k ${totalFiltered} ^:`;
+    const bufferedField = `^#^b^k ${bufferLines.length} ^:`;
+    let statusText = '';
+    statusText += stateField;
+    statusText += filterdField;
+    statusText += bufferedField;
+    if (filterPackage !== null) {
+        statusText += `^#^W^k ${filterPackage.packageName} ^:`;
+    }
+    if (filterRegexp !== null) {
+        statusText += `^#^c^k ${filterRegexp.searchterm} ^:`;
+    }
+    if (filterLogLevel !== null) {
+        statusText += `^#^M^k ${levels[filterLogLevel]} ^:`;
+    }
+    terminal(`\r${clearLine}\r${statusText}`);
+}
 
 async function selectPackage(searchTerm = null) {
-    pause = true;
+    interacting = true;
+    clearCurrentLine();
     if (!searchTerm) {
         terminal('Enter package name search: ');
         searchTerm = await terminal.inputField({}).promise;
@@ -85,7 +124,7 @@ async function selectPackage(searchTerm = null) {
     }
     if (matches.length === 0) {
         terminal('No matches found\n');
-        pause = false;
+        interacting = false;
         return;
     }
 
@@ -95,7 +134,7 @@ async function selectPackage(searchTerm = null) {
         let selectedPackage = await terminal.singleColumnMenu(matches, {}).promise;
         terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
         for (let i = 0; i < matches.length + 1; ++i) {
-            terminal(`${spaceLine}\n`);
+            terminal(`${clearLine}\n`);
         }
         terminal.moveTo(cursorPos.x, cursorPos.y - matches.length);
         packageName = selectedPackage.selectedText.substring('package:'.length);
@@ -113,7 +152,9 @@ async function selectPackage(searchTerm = null) {
     if (!filterPID) {
         terminal('^rCould not get PID, waiting for start^:\n\n');
     }
-    pause = false;
+    terminal('\n');
+    printStatus();
+    interacting = false;
 }
 
 let textColor = '^w';
@@ -129,33 +170,43 @@ terminal.on('key', async (key) => {
         terminal.hideCursor(false);
         process.exit();
     }
-    if (pause) {
+    if (interacting) {
         return;
     }
     if (key === 'l') {
-        pause = true;
+        interacting = true;
+        clearCurrentLine();
         let level = await terminal.singleColumnMenu(levels, {}).promise;
         terminal('\n');
         filterLogLevel = level.selectedIndex;
-        pause = false;
+        interacting = false;
+        printStatus();
     }
     if (key === 'L') {
+        clearCurrentLine();
         terminal('Clearing log level\n');
         filterLogLevel = null;
     }
     if (key === 's') {
-        pause = true;
+        interacting = true;
+        clearCurrentLine();
         terminal('Enter search term: ');
         let searchTerm = await terminal.inputField({}).promise;
         terminal('\n');
-        filterRegexp = new RegExp(`(${searchTerm})`, "ig");
-        pause = false;
+        filterRegexp = {
+            regexp: new RegExp(`(${searchTerm})`, "ig"),
+            searchterm: searchTerm,
+        };
+        interacting = false;
+        printStatus();
     }
     if (key === 'S') {
+        clearCurrentLine();
         terminal('Clearing search term\n');
         filterRegexp = null;
     }
     if (key === 'P') {
+        clearCurrentLine();
         terminal('Clearing app-filter\n');
         filterPackage = null;
     }
@@ -164,6 +215,11 @@ terminal.on('key', async (key) => {
     }
     if (key == 'ENTER') {
         terminal("\n");
+    }
+    if (key == ' ') {
+        paused = !paused;
+        printBuffered();
+        // terminal("\n");
     }
 });
 
@@ -196,9 +252,6 @@ function parseThreadtimeTime(day, hour) {
     return t;
 }
 
-let bufferLines = [];
-let tail = '';
-
 function checkActivityManager(line) {
     const packageName = line.parts[5];
     // Refresh the PID if the filtered process is affected
@@ -220,6 +273,8 @@ function checkActivityManager(line) {
 
 function printLines(lines, checkAM) {
     let printedLines = 0;
+    // Clear the status
+    clearCurrentLine();
     for (let l of lines) {
         if (checkAM) {
             checkActivityManager(l);
@@ -237,20 +292,23 @@ function printLines(lines, checkAM) {
             textColor = colorMap[type];
         }
         if (filterRegexp !== null) {
-            let replaced = l.line.replaceAll(filterRegexp, `^#^m$1^#^:${textColor}`);
+            let replaced = l.line.replaceAll(filterRegexp.regexp, `^#^m$1^#^:${textColor}`);
             // If the length changed we know that we found a match
             if (replaced.length === l.line.length) {
                 continue;
             }
             l.line = replaced;
         }
-        terminal(`\r${spaceLine}\r${textColor}${l.line}\n`);
+        terminal(`${textColor}${l.line}\n`);
         printedLines += 1;
     }
     // Show some kind of status so that you know when it is active
     if (printedLines == 0) {
-        terminal(`\r${spaceLine}\rFiltered ^#^g^k${lines.length}^: lines`);
+        totalFiltered += lines.length;
+        // terminal(`\r${spaceLine}\rFiltered ^#^g^k${lines.length}^: lines`);
+        // printStatus();
     }
+    printStatus();
 }
 
 const options = yargs(hideBin(process.argv))
@@ -281,10 +339,9 @@ if (options.package) {
 }
 
 logcat.stdout.on('data', function(data) {
-    if (!pause && bufferLines.length > 0) {
-        // Don't check the PID on buffered lines
-        printLines(bufferLines, false);
-        bufferLines = [];
+    const bufferData = !paused && !interacting;
+    if (bufferData && bufferLines.length > 0) {
+        printBuffered();
     }
     let logString = tail + data.toString();
     let lastNewline = logString.lastIndexOf("\n");
@@ -298,8 +355,11 @@ logcat.stdout.on('data', function(data) {
             line: l,
         });
     }
-    if (pause) {
+    if (interacting || paused) {
         bufferLines.push(...lines);
+        if (paused) {
+            printStatus();
+        }
     } else {
         printLines(lines, true);
     }
