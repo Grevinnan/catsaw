@@ -224,8 +224,6 @@ terminal.on('key', async (key) => {
         printStatus();
     }
     if (key === 'L') {
-        clearCurrentLine();
-        terminal('Clearing log level\n');
         filterLogLevel = null;
         printStatus();
     }
@@ -233,14 +231,10 @@ terminal.on('key', async (key) => {
         searchRegexp();
     }
     if (key === 'S') {
-        clearCurrentLine();
-        terminal('Clearing search term\n');
         filterRegexp = null;
         printStatus();
     }
     if (key === 'P') {
-        clearCurrentLine();
-        terminal('Clearing app-filter\n');
         filterPackage = null;
         printStatus();
     }
