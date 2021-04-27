@@ -63,6 +63,7 @@ let paused = false;
 let filterPackage = null;
 let filterRegexp = null;
 let filterLogLevel = null;
+let freezeOnMatch = false;
 
 // TODO: handle resize
 const clearLine = Array(terminal.width).join(' ');
@@ -100,7 +101,8 @@ function printStatus() {
         statusText += `^#^W^k ${filterPackage.packageName} ^:`;
     }
     if (filterRegexp !== null) {
-        statusText += `^#^c^k ${filterRegexp.searchterm} ^:`;
+        const regexpColor = freezeOnMatch ? '^c' : '^K';
+        statusText += `^#${regexpColor}^k ${filterRegexp.searchterm} ^:`;
     }
     if (filterLogLevel !== null) {
         statusText += `^#^M^k ${levels[filterLogLevel]} ^:`;
@@ -179,6 +181,23 @@ async function selectPackage(searchTerm = null) {
     interacting = false;
 }
 
+async function searchRegexp(searchTerm = null) {
+    interacting = true;
+    clearCurrentLine();
+    if (searchTerm === null) {
+        terminal('Enter search term: ');
+        searchTerm = await terminal.inputField({}).promise;
+    }
+    terminal('\n');
+    filterRegexp = {
+        regexp: new RegExp(`(${searchTerm})`, "ig"),
+        // Escape the formatting characters
+        searchterm: searchTerm.replaceAll(/\^/g, "^^"),
+    };
+    interacting = false;
+    printStatus();
+}
+
 let textColor = '^w';
 terminal.grabInput(true);
 // terminal.fullscreen(true);
@@ -208,30 +227,22 @@ terminal.on('key', async (key) => {
         clearCurrentLine();
         terminal('Clearing log level\n');
         filterLogLevel = null;
+        printStatus();
     }
     if (key === 's') {
-        interacting = true;
-        clearCurrentLine();
-        terminal('Enter search term: ');
-        let searchTerm = await terminal.inputField({}).promise;
-        terminal('\n');
-        filterRegexp = {
-            regexp: new RegExp(`(${searchTerm})`, "ig"),
-            // Escape the formatting characters
-            searchterm: searchTerm.replaceAll(/\^/g, "^^"),
-        };
-        interacting = false;
-        printStatus();
+        searchRegexp();
     }
     if (key === 'S') {
         clearCurrentLine();
         terminal('Clearing search term\n');
         filterRegexp = null;
+        printStatus();
     }
     if (key === 'P') {
         clearCurrentLine();
         terminal('Clearing app-filter\n');
         filterPackage = null;
+        printStatus();
     }
     if (key === 'p') {
         selectPackage();
@@ -243,6 +254,10 @@ terminal.on('key', async (key) => {
     }
     if (key == 'u') {
         showStatusLine = !showStatusLine;
+        printStatus();
+    }
+    if (key == 'f') {
+        freezeOnMatch = !freezeOnMatch;
         printStatus();
     }
     if (key == ' ') {
@@ -304,7 +319,9 @@ function printLines(lines, checkAM) {
     let printedLines = 0;
     // Clear the status
     clearCurrentLine();
-    for (let l of lines) {
+    for (let i = 0; i < lines.length; ++i) {
+        totalFiltered += 1;
+        const l = lines[i];
         if (checkAM) {
             checkActivityManager(l);
         }
@@ -330,12 +347,13 @@ function printLines(lines, checkAM) {
         }
         terminal(`${textColor}${l.line}\n`);
         printedLines += 1;
-    }
-    // Show some kind of status so that you know when it is active
-    if (printedLines == 0) {
-        totalFiltered += lines.length;
-        // terminal(`\r${spaceLine}\rFiltered ^#^g^k${lines.length}^: lines`);
-        // printStatus();
+        totalFiltered = 0;
+        // Break and save the remaining lines in the buffer
+        if (freezeOnMatch && filterRegexp !== null) {
+            paused = true;
+            bufferLines = lines.slice(i + 1);
+            break;
+        }
     }
     printStatus();
 }
@@ -346,26 +364,40 @@ const options = yargs(hideBin(process.argv))
     .usage('catsaw - adb logcat wrapper')
     .alias('h', 'help')
     .strict(true)
-    .option('v', {
-        alias: 'verbose',
+    .option('f', {
+        alias: 'freeze',
         type: 'boolean',
-        description: 'Verbose output',
+        description: 'Freeze on string match',
         default: false,
     })
     .option('p', {
         alias: 'package',
         type: 'string',
         description: 'Filter on selected package',
-    }).argv;
+    }).option('s', {
+        alias: 'search',
+        type: 'string',
+        description: 'Search for regular expression',
+    })
+    .argv;
 
 // TODO: Check adb status
 const currentDeviceYear = getCurrentYear();
 
 let logcat = cp.spawn('adb', ['logcat', '-v', 'threadtime']);
 
-if (options.package) {
-    selectPackage(options.package);
+async function handleOptions(options) {
+    freezeOnMatch = options.freeze;
+    if (options.package) {
+        await selectPackage(options.package);
+    }
+
+    if (options.search) {
+        await searchRegexp(options.search);
+    }
 }
+
+handleOptions(options);
 
 logcat.stdout.on('data', function(data) {
     const bufferData = !paused && !interacting;
