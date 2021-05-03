@@ -198,18 +198,23 @@ async function searchRegexp(searchTerm = null) {
     printStatus();
 }
 
+function abort() {
+    terminal.grabInput(false);
+    terminal.fullscreen(false);
+    terminal.applicationKeypad(false);
+    terminal.hideCursor(false);
+    process.exit();
+}
+
 let textColor = '^w';
 terminal.grabInput(true);
 // terminal.fullscreen(true);
 terminal.on('key', async (key) => {
     // console.log(key);
     if (key === 'CTRL_C' || key === 'CTRL_D') {
+        clearCurrentLine();
         terminal('\n');
-        terminal.grabInput(false);
-        terminal.fullscreen(false);
-        terminal.applicationKeypad(false);
-        terminal.hideCursor(false);
-        process.exit();
+        abort();
     }
     if (interacting) {
         return;
@@ -418,4 +423,10 @@ logcat.stdout.on('data', function(data) {
     } else {
         printLines(lines, true);
     }
+});
+
+logcat.on('exit', function(exitCode, signal) {
+    clearCurrentLine();
+    terminal(`logcat exited with code ${exitCode}\n`);
+    abort();
 });
