@@ -30,8 +30,13 @@ const levelMap = {
     'F': 5,
 };
 
+let currentDeviceYear = null;
+
+let logcat = null;
+let deviceID = null;
+
 function getPID(packageName) {
-    let pidProc = cp.spawnSync('adb', ['shell', 'pidof', packageName]);
+    let pidProc = cp.spawnSync('adb', ['-s', deviceID, 'shell', 'pidof', packageName]);
     let pid = pidProc.stdout.toString().trim();
     if (pid.length === 0) {
         return null;
@@ -40,7 +45,7 @@ function getPID(packageName) {
 }
 
 function getCurrentYear() {
-    let timeProc = cp.spawnSync('adb', ['shell', 'date', '+%Y']);
+    let timeProc = cp.spawnSync('adb', ['-s', deviceID, 'shell', 'date', '+%Y']);
     let currentYear = timeProc.stdout.toString().trim();
     if (currentYear.length === 0) {
         return null;
@@ -49,7 +54,7 @@ function getCurrentYear() {
 }
 
 function getTime() {
-    let timeProc = cp.spawnSync('adb', ['shell', 'date', '+%s']);
+    let timeProc = cp.spawnSync('adb', ['-s', deviceID, 'shell', 'date', '+%s']);
     let timestamp = timeProc.stdout.toString().trim();
     if (timestamp.length === 0) {
         return null;
@@ -57,7 +62,23 @@ function getTime() {
     return timestamp;
 }
 
-let showStatusLine = true;
+async function onResize(width) {
+    let newClearLine = Array(width).join(' ');
+    if (newClearLine.length < clearCurrentLine.length) {
+        clearCurrentLine();
+    }
+    clearLine = newClearLine;
+    if (logcat !== null) {
+        printStatus();
+    }
+}
+
+terminal.grabInput(true);
+terminal.on('resize', async (width, _) => {
+    onResize(width);
+});
+
+let showStatusLine = false;
 let interacting = false;
 let paused = false;
 let filterPackage = null;
@@ -65,12 +86,13 @@ let filterRegexp = null;
 let filterLogLevel = null;
 let freezeOnMatch = false;
 
-// TODO: handle resize
-const clearLine = Array(terminal.width).join(' ');
+let clearLine = null;
 let totalFiltered = 0;
 
 let bufferLines = [];
 let tail = '';
+
+onResize(terminal.width);
 
 function printBuffered() {
     // Don't check the PID on buffered lines
@@ -85,7 +107,7 @@ function clearCurrentLine() {
 
 function printStatus() {
     if (!showStatusLine) {
-        terminal(`\r${clearLine}\r`);
+        // clearCurrentLine();
         return;
     }
     const stateColor = paused ? '^R' : '^G';
@@ -137,7 +159,7 @@ async function selectPackage(searchTerm = null) {
     }
 
     // cmd package list packages -e
-    let processes = cp.spawnSync('adb', ['shell', 'cmd', 'package', 'list', 'packages', '-e']);
+    let processes = cp.spawnSync('adb', ['-s', deviceID, 'shell', 'cmd', 'package', 'list', 'packages', '-e']);
     let installedPackages = processes.stdout.toString().split(/\n/);
     let regexp = new RegExp(`${searchTerm}`, "i");
     let matches = [];
@@ -207,9 +229,9 @@ function abort() {
 }
 
 let textColor = '^w';
-terminal.grabInput(true);
-// terminal.fullscreen(true);
+
 terminal.on('key', async (key) => {
+    // console.log('hahaahah');
     // console.log(key);
     if (key === 'CTRL_C' || key === 'CTRL_D') {
         clearCurrentLine();
@@ -253,6 +275,9 @@ terminal.on('key', async (key) => {
     }
     if (key == 'u') {
         showStatusLine = !showStatusLine;
+        if (!showStatusLine) {
+            clearCurrentLine();
+        }
         printStatus();
     }
     if (key == 'f') {
@@ -265,21 +290,6 @@ terminal.on('key', async (key) => {
         // terminal("\n");
     }
 });
-
-
-//y: term.height , x: 1 ,
-// echoChar: '*' ,
-//*
-//default: 'mkdir ""' ,
-//cursorPosition: -2 ,
-// history: history ,
-// autoComplete: true ,
-// autoCompleteMenu: true ,
-// autoCompleteHint: true ,
-// hintStyle: terminal.brightBlack.italic ,
-//*/
-//maxLength: 3
-// let history = [];
 
 function parseThreadtimeTime(day, hour) {
     let t = new Date(0);
@@ -378,12 +388,12 @@ const options = yargs(hideBin(process.argv))
         type: 'string',
         description: 'Search for regular expression',
     })
+    .option('d', {
+        alias: 'device',
+        type: 'string',
+        description: 'The device ID you want to use',
+    })
     .argv;
-
-// TODO: Check adb status
-const currentDeviceYear = getCurrentYear();
-
-let logcat = cp.spawn('adb', ['logcat', '-v', 'threadtime']);
 
 async function handleOptions(options) {
     freezeOnMatch = options.freeze;
@@ -396,9 +406,7 @@ async function handleOptions(options) {
     }
 }
 
-handleOptions(options);
-
-logcat.stdout.on('data', function(data) {
+function onData(data) {
     const bufferData = !paused && !interacting;
     if (bufferData && bufferLines.length > 0) {
         printBuffered();
@@ -423,10 +431,77 @@ logcat.stdout.on('data', function(data) {
     } else {
         printLines(lines, true);
     }
-});
+}
 
-logcat.on('exit', function(exitCode, signal) {
-    clearCurrentLine();
-    terminal(`logcat exited with code ${exitCode}\n`);
-    abort();
-});
+function onStderr(data) {
+    for (let l of data.toString().split('\n')) {
+        terminal(`^y[[${l}]]^:\n`);
+    }
+}
+
+function parseDevice(deviceLine) {
+    let device = deviceLine.split('\t');
+    let valid = true;
+    if (device[1].startsWith("no permissions")) {
+        device[1] = "no permissions";
+        valid = false;
+    }
+    device.push(valid);
+    return device;
+}
+
+async function getDevice(options) {
+    let deviceProc = cp.spawnSync('adb', ['devices']);
+    const deviceProcStdout = deviceProc.stdout.toString().trim();
+    // First line is a header
+    const deviceLines = deviceProcStdout.split(/\n/g).slice(1);
+    let device = null;
+    let devices = deviceLines.map(x => parseDevice(x));
+    let validDevices = devices.filter(x => x[2]);
+    const numDevices = validDevices.length;
+    if (numDevices === 0) {
+        if (devices.length > 0) {
+            terminal.error('^rNo valid devices found these:\n');
+            for (let d of devices) {
+                terminal.error(`Info: ^b${d[1]}^:, ID: ^b${d[0]}^:\n`);
+            }
+        } else {
+            terminal.error('^rNo valid devices found, exiting\n');
+        }
+        abort();
+    } else if (options.device) {
+        const matchedIndex = validDevices.findIndex(x => x[0].localeCompare(options.device) === 0);
+        if (matchedIndex < 0) {
+            terminal.error(`^rDid not find device ^r${options.device}^:, aborting.\n`);
+            abort();
+        }
+        device = validDevices[matchedIndex];
+    } else if (numDevices === 1) {
+        device = validDevices[0];
+        terminal(`Found device: ^b${device[1]}^: with ID ^b${device[0]}^:\n`);
+    } else {
+        let showDevices = validDevices.map(x => `${x[1]} ${x[0]}`);
+        terminal('Select device:\n');
+        const selectedDevice = await terminal.singleRowMenu(showDevices, {}).promise;
+        device = validDevices[selectedDevice.selectedIndex];
+    }
+    return device;
+}
+
+async function initLogcat(options) {
+    const device = await getDevice(options);
+
+    deviceID = device[0];
+    currentDeviceYear = getCurrentYear();
+    logcat = cp.spawn('adb', ['-s', deviceID, 'logcat', '-v', 'threadtime']);
+    handleOptions(options);
+    logcat.stdout.on('data', onData);
+    logcat.stderr.on('data', onStderr);
+    logcat.on('exit', function(exitCode, signal) {
+        clearCurrentLine();
+        terminal(`logcat exited with code ${exitCode}\n`);
+        abort();
+    });
+}
+
+initLogcat(options);
